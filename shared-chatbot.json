@@ -1,0 +1,208 @@
+{
+  "name": "AgentWell — Shared AI Chatbot (Multi-client)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agentwell-zalo",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-zalo",
+      "name": "📡 Webhook Zalo",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "agentwell-zalo-shared"
+    },
+    {
+      "parameters": {
+        "operation": "getRows",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.MASTER_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "read-master-chat",
+      "name": "📋 Đọc Master Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "google-service-account",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Input: all client rows from Master Sheet\nconst clients = $input.all();\n\n// Get original webhook data\nconst webhook = $('📡 Webhook Zalo').first().json;\n\n// Extract client_id from query string: ?client=AW001\nconst clientId = (webhook.query && webhook.query.client) ? webhook.query.client : '';\n\n// Parse Zalo message payload\nconst body = webhook.body || {};\nconst msgText = (body.message && body.message.text) ? body.message.text.trim() : '';\nconst userId = (body.sender && body.sender.id) ? body.sender.id : '';\n\nif (!clientId || !msgText || !userId) {\n  return [{ json: { skip: true, reason: 'Missing client_id, message, or user_id' } }];\n}\n\n// Find matching client\nconst match = clients.find(c => c.json.client_id === clientId);\nif (!match) {\n  return [{ json: { skip: true, reason: 'Client not found: ' + clientId } }];\n}\n\nconst client = match.json;\n\n// Check if service is active\nif (client.status !== 'active') {\n  return [{\n    json: {\n      skip_ai: true,\n      user_id: userId,\n      access_token: client.zalo_access_token || '',\n      reply_text: 'Dich vu hien dang tam dung. Vui long lien he chu doanh nghiep de biet them chi tiet.'\n    }\n  }];\n}\n\n// Build AI system prompt from client context\nconst businessContext = client.ai_context || 'Doanh nghiep wellness va spa chuyen nghiep';\n\n// Detect if customer is greeting or asking about packages\nconst msgLower = msgText.toLowerCase();\nconst isGreeting = /^(xin chao|chao|hello|hi|hey|alo|cho hoi|cho minh hoi)/.test(msgLower);\nconst isAskingPackages = /(goi|package|bang gia|gia|dich vu gi|co nhung gi|gioi thieu|cac goi|muc gia|phi|bao nhieu)/.test(msgLower);\n\nconst packageInstruction = (isGreeting || isAskingPackages)\n  ? 'Hay chao hoi than thien va gioi thieu ngan gon cac goi dich vu chinh cua ' + client.name + '.'\n  : 'Chi tra loi dung vao cau hoi cua khach. KHONG gioi thieu lai cac goi dich vu tru khi khach hoi ve gia hoac dich vu.';\n\nconst systemPrompt = [\n  'Ban la tro ly AI chuyen nghiep cho ' + client.name + '.',\n  businessContext,\n  packageInstruction,\n  'Phong cach: ngan gon, than thien, chuyen nghiep. Dung tieng Viet.',\n  'Neu khach muon dat lich: hoi Ten, So dien thoai, Ngay gio, Dich vu can.',\n  'Neu khong ro y khach: hoi lai 1 cau ngan gon.'\n].join(' ');\n\nconst apiBody = JSON.stringify({\n  model: 'gpt-4o-mini',\n  messages: [\n    { role: 'system', content: systemPrompt },\n    { role: 'user', content: msgText }\n  ],\n  max_tokens: 200,\n  temperature: 0.7\n});\n\nreturn [{\n  json: {\n    skip_ai: false,\n    user_id: userId,\n    access_token: client.zalo_access_token || '',\n    client_id: client.client_id,\n    client_name: client.name,\n    booking_sheet_id: client.booking_sheet_id || '',\n    api_body: apiBody\n  }\n}];"
+      },
+      "id": "find-client",
+      "name": "🔍 Xác định khách hàng",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip_ai }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-skip-ai",
+      "name": "🔀 Cần AI?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.api_body }}",
+        "options": {}
+      },
+      "id": "call-openai-chat",
+      "name": "🤖 OpenAI Generate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ai = $input.first().json;\nconst prev = $('🔍 Xác định khách hàng').first().json;\n\nconst replyText = (ai.choices && ai.choices[0] && ai.choices[0].message)\n  ? ai.choices[0].message.content.trim()\n  : 'Xin loi, hien tai he thong dang ban. Vui long thu lai sau.';\n\nreturn [{\n  json: {\n    user_id: prev.user_id,\n    access_token: prev.access_token,\n    reply_text: replyText\n  }\n}];"
+      },
+      "id": "parse-ai-response",
+      "name": "📝 Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openapi.zalo.me/v2.0/oa/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "access_token", "value": "={{ $json.access_token }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ recipient: { user_id: $json.user_id }, message: { text: $json.reply_text } }) }}",
+        "options": {}
+      },
+      "id": "send-zalo-reply",
+      "name": "📤 Gửi reply Zalo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1560, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openapi.zalo.me/v2.0/oa/message",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "access_token", "value": "={{ $json.access_token }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify({ recipient: { user_id: $json.user_id }, message: { text: $json.reply_text } }) }}",
+        "options": {}
+      },
+      "id": "send-zalo-fallback",
+      "name": "📤 Gửi reply (dịch vụ tắt)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1120, 420]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "ok",
+        "options": {}
+      },
+      "id": "webhook-response",
+      "name": "✅ Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1780, 300]
+    }
+  ],
+  "connections": {
+    "📡 Webhook Zalo": {
+      "main": [[{ "node": "📋 Đọc Master Sheet", "type": "main", "index": 0 }]]
+    },
+    "📋 Đọc Master Sheet": {
+      "main": [[{ "node": "🔍 Xác định khách hàng", "type": "main", "index": 0 }]]
+    },
+    "🔍 Xác định khách hàng": {
+      "main": [[{ "node": "🔀 Cần AI?", "type": "main", "index": 0 }]]
+    },
+    "🔀 Cần AI?": {
+      "main": [
+        [{ "node": "🤖 OpenAI Generate", "type": "main", "index": 0 }],
+        [{ "node": "📤 Gửi reply (dịch vụ tắt)", "type": "main", "index": 0 }]
+      ]
+    },
+    "🤖 OpenAI Generate": {
+      "main": [[{ "node": "📝 Parse AI Response", "type": "main", "index": 0 }]]
+    },
+    "📝 Parse AI Response": {
+      "main": [[{ "node": "📤 Gửi reply Zalo", "type": "main", "index": 0 }]]
+    },
+    "📤 Gửi reply Zalo": {
+      "main": [[{ "node": "✅ Webhook Response", "type": "main", "index": 0 }]]
+    },
+    "📤 Gửi reply (dịch vụ tắt)": {
+      "main": [[{ "node": "✅ Webhook Response", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "agentwell" },
+    { "name": "chatbot" },
+    { "name": "multi-client" }
+  ],
+  "meta": { "instanceId": "agentwell-n8n" },
+  "id": "agentwell-shared-chatbot",
+  "versionId": "1.0.0"
+}

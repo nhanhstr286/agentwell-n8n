@@ -1,0 +1,122 @@
+{
+  "name": "AgentWell — Subscription Manager (Daily)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }]
+        }
+      },
+      "id": "cron-sub",
+      "name": "⏰ Cron 9:00 hàng ngày",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getRows",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.MASTER_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "read-master",
+      "name": "📋 Đọc Master Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "google-service-account",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst today = new Date();\ntoday.setHours(0, 0, 0, 0);\nconst OWNER_ID = process.env.OWNER_TELEGRAM_ID || '7970044894';\n\nconst toSend = [];\nconst expiredList = [];\nconst warnList = [];\n\nfor (const item of items) {\n  const r = item.json;\n  if (!r.client_id || !r.end_date) continue;\n  if (r.status === 'expired' || r.status === 'suspended') continue;\n\n  const parts = r.end_date.toString().split('/');\n  if (parts.length !== 3) continue;\n  const endDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));\n  if (isNaN(endDate.getTime())) continue;\n\n  const daysLeft = Math.ceil((endDate - today) / 86400000);\n  const pkg = (r.package || '').charAt(0).toUpperCase() + (r.package || '').slice(1);\n  const price = parseInt(r.monthly_price || 0).toLocaleString('vi-VN');\n  const ownerName = r.owner_name || r.name || 'ban';\n\n  if (daysLeft <= 0) {\n    expiredList.push(r.name + ' (het han ' + r.end_date + ')');\n    if (r.telegram_chat_id) {\n      toSend.push({\n        telegram_id: r.telegram_chat_id,\n        message: '🔴 HET HAN DICH VU — AgentWell\\n\\nChao ' + ownerName + '!\\n\\nGoi ' + pkg + ' cua ban da het han ngay ' + r.end_date + '.\\n\\nBot se DUNG hoat dong trong 24h.\\n\\nDe gia han dich vu:\\nZalo: 0905 544 556\\nWeb: agentwell.vercel.app\\n\\nCam on ban da tin tuong AgentWell!'\n      });\n    }\n  } else if (daysLeft <= 7) {\n    warnList.push(r.name + ' (con ' + daysLeft + ' ngay)');\n    if (r.telegram_chat_id && [1, 3, 7].includes(daysLeft)) {\n      const emoji = daysLeft === 1 ? '🚨' : daysLeft === 3 ? '⚠️' : '📢';\n      toSend.push({\n        telegram_id: r.telegram_chat_id,\n        message: emoji + ' NHAC GIA HAN — Con ' + daysLeft + ' ngay\\n\\nChao ' + ownerName + '!\\n\\nGoi ' + pkg + ' cua ban het han ngay ' + r.end_date + '.\\nPhi gia han: ' + price + ' VND/thang\\n\\nGia han de bot tiep tuc hoat dong 24/7:\\nZalo: 0905 544 556\\nWeb: agentwell.vercel.app'\n      });\n    }\n  }\n}\n\nif (expiredList.length > 0 || warnList.length > 0) {\n  let ownerMsg = '📊 SUBSCRIPTION REPORT — AgentWell\\n====================';\n  if (expiredList.length > 0) {\n    ownerMsg += '\\n\\n🔴 DA HET HAN (' + expiredList.length + ' khach):';\n    expiredList.forEach(x => { ownerMsg += '\\n  - ' + x; });\n    ownerMsg += '\\n  → Vao n8n tat workflow cua khach nay';\n  }\n  if (warnList.length > 0) {\n    ownerMsg += '\\n\\n⚠️ SAP HET HAN:';\n    warnList.forEach(x => { ownerMsg += '\\n  - ' + x; });\n  }\n  ownerMsg += '\\n\\n📱 Da gui nhac toi khach hang.';\n  toSend.push({ telegram_id: OWNER_ID, message: ownerMsg });\n}\n\nif (toSend.length === 0) {\n  return [{ json: { skip: true, message: 'Khong co khach sap het han hom nay' } }];\n}\nreturn toSend.map(t => ({ json: t }));"
+      },
+      "id": "process-expiry",
+      "name": "🔍 Tính hạn + build tin nhắn",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.skip }}",
+              "operation": "notEqual",
+              "value2": "true"
+            }
+          ]
+        }
+      },
+      "id": "if-has-msg",
+      "name": "🔀 Có tin cần gửi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "send-telegram",
+      "name": "📨 Gửi Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1120, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "AgentWell Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "⏰ Cron 9:00 hàng ngày": {
+      "main": [[{ "node": "📋 Đọc Master Sheet", "type": "main", "index": 0 }]]
+    },
+    "📋 Đọc Master Sheet": {
+      "main": [[{ "node": "🔍 Tính hạn + build tin nhắn", "type": "main", "index": 0 }]]
+    },
+    "🔍 Tính hạn + build tin nhắn": {
+      "main": [[{ "node": "🔀 Có tin cần gửi?", "type": "main", "index": 0 }]]
+    },
+    "🔀 Có tin cần gửi?": {
+      "main": [
+        [{ "node": "📨 Gửi Telegram", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "agentwell" },
+    { "name": "subscription" },
+    { "name": "multi-client" }
+  ],
+  "meta": { "instanceId": "agentwell-n8n" },
+  "id": "agentwell-subscription-manager",
+  "versionId": "1.0.0"
+}

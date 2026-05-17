@@ -1,0 +1,133 @@
+{
+  "name": "AgentWell — Revenue Report Runner (Single Client)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "exec-trigger",
+      "name": "🚀 Nhận cấu hình khách",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getRows",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $json.booking_sheet_id }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "read-booking-sheet",
+      "name": "📊 Đọc sheet booking khách",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "google-service-account",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bookingRows = $input.all();\n\n// Get client config from the Execute Workflow Trigger node\nconst client = $('🚀 Nhận cấu hình khách').first().json;\n\nconst now = new Date();\nconst today = new Date(now.getFullYear(), now.getMonth(), now.getDate());\nconst week1Start = new Date(today); week1Start.setDate(today.getDate() - 7);\nconst week2Start = new Date(today); week2Start.setDate(today.getDate() - 14);\nconst month1Start = new Date(today); month1Start.setDate(today.getDate() - 30);\n\nlet thisWeek = { bookings: 0, revenue: 0, services: {}, newCustomers: new Set(), phones: new Set() };\nlet lastWeek = { bookings: 0, revenue: 0, phones: new Set() };\nlet thisMonth = { bookings: 0, revenue: 0, services: {}, phones: new Set() };\nconst allPhones = new Set();\n\nfor (const item of bookingRows) {\n  const row = item.json;\n  const phone = row.phone || row.Phone || row.sdt || '';\n  if (!phone) continue;\n\n  const dateStr = row.checkout || row.checkin || row.created_at || '';\n  if (!dateStr) continue;\n\n  let visitDate;\n  if (dateStr.includes('/')) {\n    const parts = dateStr.split('/');\n    visitDate = new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0]));\n  } else {\n    visitDate = new Date(dateStr);\n  }\n  if (isNaN(visitDate.getTime())) continue;\n\n  const revenue = parseFloat(row.revenue || row.amount || row.price || row.gia_tien || row.total || row.tong_tien || 0);\n  const service = row.service || row.dich_vu || 'Khac';\n\n  if (visitDate < week1Start) allPhones.add(phone);\n\n  if (visitDate >= week1Start && visitDate < today) {\n    thisWeek.bookings++;\n    thisWeek.revenue += revenue;\n    thisWeek.phones.add(phone);\n    thisWeek.services[service] = (thisWeek.services[service] || 0) + 1;\n    if (!allPhones.has(phone)) thisWeek.newCustomers.add(phone);\n  }\n  if (visitDate >= week2Start && visitDate < week1Start) {\n    lastWeek.bookings++;\n    lastWeek.revenue += revenue;\n    lastWeek.phones.add(phone);\n  }\n  if (visitDate >= month1Start && visitDate < today) {\n    thisMonth.bookings++;\n    thisMonth.revenue += revenue;\n    thisMonth.phones.add(phone);\n    thisMonth.services[service] = (thisMonth.services[service] || 0) + 1;\n  }\n}\n\nconst topServices = (obj) => Object.entries(obj)\n  .sort((a, b) => b[1] - a[1]).slice(0, 3)\n  .map(([s, c]) => s + ': ' + c + ' luot').join(', ') || 'Chua co du lieu';\n\nconst bookingChange = lastWeek.bookings > 0\n  ? Math.round((thisWeek.bookings - lastWeek.bookings) / lastWeek.bookings * 100) : 0;\nconst revenueChange = lastWeek.revenue > 0\n  ? Math.round((thisWeek.revenue - lastWeek.revenue) / lastWeek.revenue * 100) : 0;\n\nconst trendB = bookingChange > 0 ? 'tang +' + bookingChange + '%' : bookingChange < 0 ? 'giam ' + bookingChange + '%' : 'khong doi';\nconst trendR = revenueChange > 0 ? 'tang +' + revenueChange + '%' : revenueChange < 0 ? 'giam ' + revenueChange + '%' : 'khong doi';\n\nconst fmt = (n) => n > 0 ? n.toLocaleString('vi-VN') + ' d' : 'Chua nhap';\n\nconst weekLabel = week1Start.toLocaleDateString('vi-VN') + ' - ' + new Date(today.getTime() - 86400000).toLocaleDateString('vi-VN');\nconst monthLabel = month1Start.toLocaleDateString('vi-VN') + ' - ' + new Date(today.getTime() - 86400000).toLocaleDateString('vi-VN');\n\nconst summary = [\n  'TUAN NAY (' + weekLabel + ')',\n  '- Tong booking: ' + thisWeek.bookings,\n  '- Doanh thu: ' + fmt(thisWeek.revenue),\n  '- Khach moi: ' + thisWeek.newCustomers.size,\n  '- Top dich vu: ' + topServices(thisWeek.services),\n  '',\n  'TUAN TRUOC (so sanh)',\n  '- Booking: ' + lastWeek.bookings + ' (' + trendB + ')',\n  '- Doanh thu: ' + fmt(lastWeek.revenue) + ' (' + trendR + ')',\n  '',\n  'THANG NAY (' + monthLabel + ')',\n  '- Tong booking: ' + thisMonth.bookings,\n  '- Doanh thu: ' + fmt(thisMonth.revenue),\n  '- Khach doc lap: ' + thisMonth.phones.size,\n  '- Top dich vu: ' + topServices(thisMonth.services)\n].join('\\n');\n\nconst aiBody = JSON.stringify({\n  model: 'gpt-4o-mini',\n  messages: [\n    {\n      role: 'system',\n      content: 'Ban la chuyen gia phan tich kinh doanh cho ' + client.name + '. Dua tren so lieu, viet bao cao ngan bang tieng Viet (toi da 120 tu): (1) Nhan xet hieu suat tuan nay, (2) Xu huong noi bat, (3) 2 khuyen nghi cu the. Khong dung Markdown.'\n    },\n    { role: 'user', content: 'So lieu:\\n' + summary }\n  ],\n  max_tokens: 250,\n  temperature: 0.6\n});\n\nreturn [{\n  json: {\n    client_id: client.client_id,\n    client_name: client.name,\n    telegram_chat_id: client.telegram_chat_id,\n    week_label: weekLabel,\n    month_label: monthLabel,\n    week_bookings: thisWeek.bookings,\n    week_revenue: thisWeek.revenue,\n    week_new_customers: thisWeek.newCustomers.size,\n    month_bookings: thisMonth.bookings,\n    month_revenue: thisMonth.revenue,\n    trend_booking: trendB,\n    trend_revenue: trendR,\n    top_services_week: topServices(thisWeek.services),\n    top_services_month: topServices(thisMonth.services),\n    fmt_week_revenue: fmt(thisWeek.revenue),\n    fmt_month_revenue: fmt(thisMonth.revenue),\n    ai_body: aiBody\n  }\n}];"
+      },
+      "id": "calc-metrics",
+      "name": "📈 Tổng hợp số liệu",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.OPENAI_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.ai_body }}",
+        "options": {}
+      },
+      "id": "call-openai-runner",
+      "name": "🤖 AI Phân tích",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ai = $input.first().json;\nconst stats = $('📈 Tổng hợp số liệu').first().json;\nconst aiText = (ai.choices && ai.choices[0]) ? ai.choices[0].message.content : 'Khong the phan tich.';\n\nconst trendBSymbol = stats.trend_booking.includes('tang') ? '▲' : stats.trend_booking.includes('giam') ? '▼' : '→';\nconst trendRSymbol = stats.trend_revenue.includes('tang') ? '▲' : stats.trend_revenue.includes('giam') ? '▼' : '→';\n\nconst msg = [\n  '📊 BAO CAO DOANH THU — ' + stats.client_name.toUpperCase(),\n  '====================',\n  '📅 Tuan: ' + stats.week_label,\n  '',\n  '🎯 TUAN NAY',\n  '• Booking: ' + stats.week_bookings + ' luot ' + trendBSymbol + ' ' + stats.trend_booking,\n  '• Doanh thu: ' + stats.fmt_week_revenue + ' ' + trendRSymbol + ' ' + stats.trend_revenue,\n  '• Khach moi: ' + stats.week_new_customers + ' nguoi',\n  '• Top dich vu: ' + stats.top_services_week,\n  '',\n  '📆 30 NGAY GAN NHAT',\n  '• Booking: ' + stats.month_bookings + ' luot',\n  '• Doanh thu: ' + stats.fmt_month_revenue,\n  '• Top dich vu: ' + stats.top_services_month,\n  '====================',\n  '🧠 NHAN XET AI:',\n  aiText,\n  '====================',\n  'AgentWell Revenue Report — Thu 2'\n].join('\\n');\n\nreturn [{ json: { message: msg, telegram_chat_id: stats.telegram_chat_id } }];"
+      },
+      "id": "build-report-msg",
+      "name": "📋 Build Report Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.telegram_chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "send-report-tele",
+      "name": "📨 Gửi báo cáo Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot",
+          "name": "AgentWell Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "🚀 Nhận cấu hình khách": {
+      "main": [[{ "node": "📊 Đọc sheet booking khách", "type": "main", "index": 0 }]]
+    },
+    "📊 Đọc sheet booking khách": {
+      "main": [[{ "node": "📈 Tổng hợp số liệu", "type": "main", "index": 0 }]]
+    },
+    "📈 Tổng hợp số liệu": {
+      "main": [[{ "node": "🤖 AI Phân tích", "type": "main", "index": 0 }]]
+    },
+    "🤖 AI Phân tích": {
+      "main": [[{ "node": "📋 Build Report Message", "type": "main", "index": 0 }]]
+    },
+    "📋 Build Report Message": {
+      "main": [[{ "node": "📨 Gửi báo cáo Telegram", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "agentwell" },
+    { "name": "revenue-report" },
+    { "name": "runner" }
+  ],
+  "meta": { "instanceId": "agentwell-n8n" },
+  "id": "agentwell-revenue-runner",
+  "versionId": "1.0.0"
+}

@@ -1,0 +1,115 @@
+{
+  "name": "AgentWell — Revenue Report Coordinator (Multi-client)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 8 * * 1" }]
+        }
+      },
+      "id": "cron-coord",
+      "name": "⏰ Cron Thứ 2 — 8:00 sáng",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "operation": "getRows",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.MASTER_SHEET_ID }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "read-master-coord",
+      "name": "📋 Đọc Master Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [460, 300],
+      "credentials": {
+        "googleApi": {
+          "id": "google-service-account",
+          "name": "Google Service Account account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Filter: only active clients with Growth or Scale package\nconst eligible = items.filter(item => {\n  const r = item.json;\n  return r.client_id &&\n    r.status === 'active' &&\n    ['growth', 'scale'].includes((r.package || '').toLowerCase()) &&\n    r.booking_sheet_id &&\n    r.telegram_chat_id;\n});\n\nif (eligible.length === 0) {\n  return [{ json: { skip: true, message: 'No eligible clients for revenue report' } }];\n}\n\nreturn eligible.map(item => ({\n  json: {\n    client_id: item.json.client_id,\n    name: item.json.name,\n    package: item.json.package,\n    telegram_chat_id: item.json.telegram_chat_id,\n    booking_sheet_id: item.json.booking_sheet_id\n  }\n}));"
+      },
+      "id": "filter-clients",
+      "name": "🔍 Lọc khách Growth + Scale",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.skip === true }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-has-clients",
+      "name": "🔀 Có khách cần báo cáo?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "workflowId": "REVENUE_RUNNER_WORKFLOW_ID",
+        "source": "passthrough",
+        "options": {}
+      },
+      "id": "exec-runner",
+      "name": "🚀 Gọi Revenue Runner (từng khách)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [1120, 200]
+    }
+  ],
+  "connections": {
+    "⏰ Cron Thứ 2 — 8:00 sáng": {
+      "main": [[{ "node": "📋 Đọc Master Sheet", "type": "main", "index": 0 }]]
+    },
+    "📋 Đọc Master Sheet": {
+      "main": [[{ "node": "🔍 Lọc khách Growth + Scale", "type": "main", "index": 0 }]]
+    },
+    "🔍 Lọc khách Growth + Scale": {
+      "main": [[{ "node": "🔀 Có khách cần báo cáo?", "type": "main", "index": 0 }]]
+    },
+    "🔀 Có khách cần báo cáo?": {
+      "main": [
+        [],
+        [{ "node": "🚀 Gọi Revenue Runner (từng khách)", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "Asia/Ho_Chi_Minh"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "agentwell" },
+    { "name": "revenue-report" },
+    { "name": "coordinator" }
+  ],
+  "meta": { "instanceId": "agentwell-n8n" },
+  "id": "agentwell-revenue-coordinator",
+  "versionId": "1.0.0"
+}
